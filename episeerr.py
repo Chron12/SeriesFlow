@@ -1740,8 +1740,9 @@ def process_sonarr_webhook():
                 app.logger.info(f"Series {series_title} has no episeerr tags, doing nothing")
                 return jsonify({"status": "success", "message": "Series has no episeerr tags, no processing needed"}), 200
         
-        # Check for pending Jellyseerr request
+        # Check for pending Jellyseerr request and get requested seasons
         jellyseerr_request_id = None
+        jellyseerr_requested_seasons = None  # Will contain list of requested season numbers
         tvdb_id_str = str(tvdb_id) if tvdb_id else None
 
         app.logger.info(f"Looking for Jellyseerr request with TVDB ID: {tvdb_id_str}")
@@ -1753,17 +1754,18 @@ def process_sonarr_webhook():
                     with open(request_file, 'r') as f:
                         request_data = json.load(f)
                     jellyseerr_request_id = request_data.get('request_id')
-                    app.logger.info(f"✓ Found Jellyseerr request file: {jellyseerr_request_id}")
-                    
+                    jellyseerr_requested_seasons = request_data.get('requested_seasons', [])
+                    app.logger.info(f"✓ Found Jellyseerr request file: {jellyseerr_request_id}, Requested seasons: {jellyseerr_requested_seasons}")
+
                     # Cancel the Jellyseerr request
                     app.logger.info(f"Cancelling Jellyseerr request {jellyseerr_request_id}")
                     cancel_result = episeerr_utils.delete_overseerr_request(jellyseerr_request_id)
                     app.logger.info(f"Jellyseerr cancellation result: {cancel_result}")
-                    
+
                     # Delete the file after processing
                     os.remove(request_file)
                     app.logger.info(f"✓ Removed Jellyseerr request file for TVDB ID {tvdb_id_str}")
-                    
+
                 except Exception as e:
                     app.logger.error(f"Error processing Jellyseerr request file: {str(e)}")
             else:
@@ -1910,12 +1912,23 @@ def process_sonarr_webhook():
                                         seasons_dict[season_num].append(ep)
 
                                 # Get first episode of each season
-                                for season_num in sorted(seasons_dict.keys()):
+                                # If we have Jellyseerr requested seasons, only monitor those
+                                # Otherwise, monitor first episode of ALL seasons
+                                seasons_to_monitor = sorted(seasons_dict.keys())
+                                if jellyseerr_requested_seasons:
+                                    # Filter to only requested seasons
+                                    seasons_to_monitor = [s for s in seasons_to_monitor if s in jellyseerr_requested_seasons]
+                                    app.logger.info(f"Jellyseerr request: Filtering to requested seasons {jellyseerr_requested_seasons}")
+
+                                for season_num in seasons_to_monitor:
                                     season_episodes = sorted(seasons_dict[season_num], key=lambda x: x.get('episodeNumber', 0))
                                     if season_episodes:
                                         episodes_to_monitor.append(season_episodes[0]['id'])
 
-                                app.logger.info(f"Initial add: Monitoring first episode of {len(episodes_to_monitor)} seasons for {series_title}")
+                                if jellyseerr_requested_seasons:
+                                    app.logger.info(f"Initial add (Jellyseerr): Monitoring first episode of requested seasons {seasons_to_monitor} for {series_title}")
+                                else:
+                                    app.logger.info(f"Initial add: Monitoring first episode of {len(episodes_to_monitor)} seasons for {series_title}")
 
                             except (ValueError, TypeError):
                                 # Fallback to pilot episode
@@ -2043,19 +2056,43 @@ def process_seerr_webhook():
         tvdb_id = media_info.get('tvdbId')
         tmdb_id = media_info.get('tmdbId')
         title = json_data.get('subject', 'Unknown Show')
-        
-        app.logger.info(f"TVDB ID: {tvdb_id}, TMDB ID: {tmdb_id}, Title: {title}")
-        
+
+        # Extract requested seasons from extra field
+        requested_seasons = []
+        extra_data = json_data.get('extra', [])
+        for item in extra_data:
+            if item.get('name') == 'Requested Seasons':
+                seasons_value = item.get('value', '')
+                # Parse seasons (format could be "1", "1, 2, 3", "1-3", etc.)
+                try:
+                    # Handle comma-separated seasons
+                    if ',' in seasons_value:
+                        requested_seasons = [int(s.strip()) for s in seasons_value.split(',')]
+                    # Handle range format (1-3)
+                    elif '-' in seasons_value:
+                        parts = seasons_value.split('-')
+                        start, end = int(parts[0].strip()), int(parts[1].strip())
+                        requested_seasons = list(range(start, end + 1))
+                    # Handle single season
+                    else:
+                        requested_seasons = [int(seasons_value.strip())]
+                except (ValueError, IndexError) as e:
+                    app.logger.warning(f"Could not parse requested seasons '{seasons_value}': {e}")
+                break
+
+        app.logger.info(f"TVDB ID: {tvdb_id}, TMDB ID: {tmdb_id}, Title: {title}, Requested Seasons: {requested_seasons}")
+
         if tvdb_id and request_id:
             tvdb_id_str = str(tvdb_id)
             request_file = os.path.join(REQUESTS_DIR, f"jellyseerr-{tvdb_id_str}.json")
-            
+
             request_data = {
                 'request_id': request_id,
                 'title': title,
                 'tmdb_id': tmdb_id,
                 'tvdb_id': tvdb_id,
-                'timestamp': int(time.time())
+                'timestamp': int(time.time()),
+                'requested_seasons': requested_seasons  # Store the requested seasons
             }
             
             os.makedirs(REQUESTS_DIR, exist_ok=True)
