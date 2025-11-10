@@ -1602,6 +1602,9 @@ def get_pending_requests():
                         # Add needs_season_selection flag if not present (for Jellyseerr requests)
                         if 'needs_season_selection' not in request_data:
                             request_data['needs_season_selection'] = True
+                        # Add created_at for sorting if only timestamp exists
+                        if 'created_at' not in request_data and 'timestamp' in request_data:
+                            request_data['created_at'] = request_data['timestamp']
                         pending_requests.append(request_data)
                 except Exception as e:
                     app.logger.error(f"Error reading request file {filename}: {str(e)}")
