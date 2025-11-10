@@ -1731,40 +1731,11 @@ def process_sonarr_webhook():
             auto_assign_enabled = global_settings.get('auto_assign_new_series', False)
             
             if auto_assign_enabled:
-                app.logger.info(f"Auto-assign enabled: Adding {series_title} to default rule (no processing)")
-                
-                # Add to default rule (same logic as episeerr_default but without episode processing)
-                try:
-                    config = load_config()
-                    default_rule_name = config.get('default_rule', 'default')
-                    
-                    if default_rule_name not in config['rules']:
-                        app.logger.error(f"Default rule '{default_rule_name}' not found in config!")
-                        return jsonify({"status": "error", "message": f"Default rule '{default_rule_name}' not found"}), 500
-                    
-                    series_id_str = str(series_id)
-                    target_rule = config['rules'][default_rule_name]
-                    
-                    if 'series' not in target_rule:
-                        target_rule['series'] = {}
-                    
-                    series_dict = target_rule['series']
-                    if not isinstance(series_dict, dict):
-                        series_dict = {}
-                        target_rule['series'] = series_dict
-                    
-                    if series_id_str not in series_dict:
-                        series_dict[series_id_str] = {'activity_date': None}
-                        save_config(config)
-                        app.logger.info(f"✓ Auto-assigned {series_title} to default rule '{default_rule_name}' (no episode processing)")
-                    else:
-                        app.logger.info(f"Series {series_id_str} already in rule '{default_rule_name}'")
-                    
-                    return jsonify({"status": "success", "message": f"Auto-assigned to default rule"}), 200
-                    
-                except Exception as e:
-                    app.logger.error(f"Error auto-assigning series: {str(e)}", exc_info=True)
-                    return jsonify({"status": "error", "message": f"Failed to auto-assign: {str(e)}"}), 500
+                app.logger.info(f"Auto-assign enabled: Adding {series_title} to default rule and monitoring first episode")
+
+                # Set has_episeerr_default to True to trigger the full processing flow
+                has_episeerr_default = True
+                app.logger.info(f"Auto-assign treating {series_title} as if it has episeerr_default tag")
             else:
                 app.logger.info(f"Series {series_title} has no episeerr tags, doing nothing")
                 return jsonify({"status": "success", "message": "Series has no episeerr tags, no processing needed"}), 200
