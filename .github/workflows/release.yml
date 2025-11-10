@@ -1,0 +1,92 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v2.6.0, v2.6.1, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get all history for changelog generation
+
+      - name: Get tag message
+        id: tag_message
+        run: |
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 ${{ github.ref_name }}^ 2>/dev/null || echo "")
+
+          # Generate changelog
+          if [ -z "$PREV_TAG" ]; then
+            # First release - show all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Show commits since previous tag
+            CHANGELOG=$(git log ${PREV_TAG}..${{ github.ref_name }} --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: SeriesFlow ${{ steps.get_version.outputs.version }}
+          body: |
+            ## SeriesFlow ${{ steps.get_version.outputs.version }}
+
+            ${{ steps.tag_message.outputs.message }}
+
+            ---
+
+            ### 📝 Changelog
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+
+            ### 📦 Installation
+
+            **Docker (Recommended):**
+            ```yaml
+            services:
+              seriesflow:
+                image: vansmak/episeerr:latest
+                # Copy files from this repo into container for SeriesFlow features
+            ```
+
+            **Manual:**
+            - Download the source code below
+            - Copy Python files to your Episeerr installation
+            - Restart the application
+
+            ---
+
+            ☕ **Support Development**: Rarely coffee, likely Red Bull, probably weed money.
+
+            🙏 **Credits**: Fork of [Episeerr](https://github.com/Vansmak/episeerr) by Vansmak
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
