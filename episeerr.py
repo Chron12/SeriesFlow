@@ -1896,10 +1896,32 @@ def process_sonarr_webhook():
                             
                         else:  # episodes
                             try:
-                                # Get specific number of episodes from Season 1
                                 num_episodes = get_count or 1
-                                episodes_to_monitor = [ep['id'] for ep in season1_episodes[:num_episodes]]
-                                app.logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes for {series_title}")
+
+                                # Special behavior: If get_count is 1, monitor first episode of EACH season
+                                # This allows "sampling" each season instead of just Season 1
+                                if num_episodes == 1:
+                                    # Group episodes by season
+                                    seasons_dict = {}
+                                    for ep in all_episodes:
+                                        season_num = ep.get('seasonNumber', 0)
+                                        if season_num > 0:  # Skip specials (season 0)
+                                            if season_num not in seasons_dict:
+                                                seasons_dict[season_num] = []
+                                            seasons_dict[season_num].append(ep)
+
+                                    # Get first episode of each season
+                                    for season_num in sorted(seasons_dict.keys()):
+                                        season_episodes = sorted(seasons_dict[season_num], key=lambda x: x.get('episodeNumber', 0))
+                                        if season_episodes:
+                                            episodes_to_monitor.append(season_episodes[0]['id'])
+
+                                    app.logger.info(f"Monitoring first episode of {len(episodes_to_monitor)} seasons for {series_title}")
+                                else:
+                                    # Get specific number of episodes from Season 1 only
+                                    episodes_to_monitor = [ep['id'] for ep in season1_episodes[:num_episodes]]
+                                    app.logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes of Season 1 for {series_title}")
+
                             except (ValueError, TypeError):
                                 # Fallback to pilot episode
                                 episodes_to_monitor = [season1_episodes[0]['id']] if season1_episodes else []
