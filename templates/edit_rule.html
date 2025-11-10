@@ -88,6 +88,16 @@
 
                             <div class="mb-3">
                                 <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="keep_season_premieres" name="keep_season_premieres"
+                                           {% if rule.keep_season_premieres %}checked{% endif %}>
+                                    <label class="form-check-label" for="keep_season_premieres">
+                                        Keep season premieres (S01E01, S02E01, etc.)
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check">
                                     <input class="form-check-input" type="checkbox" id="set_as_default" name="set_as_default"
                                            {% if rule_name == config.get('default_rule') %}checked{% endif %}>
                                     <label class="form-check-label" for="set_as_default">
@@ -141,15 +151,30 @@
                                     <div class="mb-3">
                                         <label for="dormant_days" class="form-label">
                                             Dormant Timer (days)
-                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip" 
+                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip"
                                             title="Nuclear option: Remove ALL content if series is completely inactive for X days."></i>
                                         </label>
-                                        <input type="number" class="form-control" id="dormant_days" 
-                                            name="dormant_days" min="1" 
+                                        <input type="number" class="form-control" id="dormant_days"
+                                            name="dormant_days" min="1"
                                             value="{% if rule.dormant_days %}{{ rule.dormant_days }}{% endif %}"
                                             placeholder="Leave empty to never remove dormant series">
                                         <div class="form-text text-muted">
                                             <small>Complete cleanup for abandoned series</small>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="min_retention_days" class="form-label">
+                                            Minimum Retention (days)
+                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip"
+                                            title="Seeding protection: Files must stay on server for at least X days before ANY cleanup can occur."></i>
+                                        </label>
+                                        <input type="number" class="form-control" id="min_retention_days"
+                                            name="min_retention_days" min="1"
+                                            value="{% if rule.min_retention_days %}{{ rule.min_retention_days }}{% endif %}"
+                                            placeholder="Leave empty for no minimum retention">
+                                        <div class="form-text text-muted">
+                                            <small>Protect files for seeding (overrides all cleanup)</small>
                                         </div>
                                     </div>
                                 </div>
@@ -167,9 +192,9 @@
                                         • Get: {% if rule.get_type == 'all' %}All episodes{% elif rule.get_type == 'seasons' %}{{ rule.get_count|default(1) }} season(s){% else %}{{ rule.get_count|default(1) }} episode(s){% endif %}<br>
                                         • Keep: {% if rule.keep_type == 'all' %}All episodes{% elif rule.keep_type == 'seasons' %}{{ rule.keep_count|default(1) }} season(s){% else %}{{ rule.keep_count|default(1) }} episode(s){% endif %}<br>
                                     {% endif %}
-                                    
+
                                     <!-- FIXED: Grace Period Status -->
-                                    {% if rule.get('grace_watched') or rule.get('grace_unwatched') or rule.get('dormant_days') %}
+                                    {% if rule.get('grace_watched') or rule.get('grace_unwatched') or rule.get('dormant_days') or rule.get('min_retention_days') %}
                                         <strong>Time-based Cleanup:</strong><br>
                                         {% if rule.get('grace_watched') %}
                                             • Watched Grace: {{ rule.grace_watched }} days<br>
@@ -179,6 +204,9 @@
                                         {% endif %}
                                         {% if rule.get('dormant_days') %}
                                             • Dormant Timer: {{ rule.dormant_days }} days<br>
+                                        {% endif %}
+                                        {% if rule.get('min_retention_days') %}
+                                            • Minimum Retention: {{ rule.min_retention_days }} days<br>
                                         {% endif %}
                                     {% else %}
                                         • <span class="text-warning">⚠ No time-based cleanup configured</span><br>

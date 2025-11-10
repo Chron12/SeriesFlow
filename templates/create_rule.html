@@ -92,13 +92,22 @@
 
                             <div class="mb-3">
                                 <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="keep_season_premieres" name="keep_season_premieres">
+                                    <label class="form-check-label" for="keep_season_premieres">
+                                        Keep season premieres (S01E01, S02E01, etc.)
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <div class="form-check">
                                     <input class="form-check-input" type="checkbox" id="set_as_default" name="set_as_default">
                                     <label class="form-check-label" for="set_as_default">
                                         <i class="fas fa-star me-1"></i>Set as default rule
                                     </label>
                                     <div class="form-text">Default rule is used for new series and auto-assignments</div>
                                 </div>
-                            </div>>
+                            </div>
 
                         <div class="col-md-6">
                             <div class="card bg-dark border-secondary">
@@ -139,14 +148,28 @@
                                     <div class="mb-3">
                                         <label for="dormant_days" class="form-label">
                                             Dormant Timer (days)
-                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip" 
+                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip"
                                             title="Nuclear option: Remove ALL content if series is completely inactive for X days."></i>
                                         </label>
-                                        <input type="number" class="form-control" id="dormant_days" 
-                                            name="dormant_days" min="1" 
+                                        <input type="number" class="form-control" id="dormant_days"
+                                            name="dormant_days" min="1"
                                             placeholder="Leave empty to never remove dormant series">
                                         <div class="form-text text-muted">
                                             <small>Complete cleanup for abandoned series</small>
+                                        </div>
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="min_retention_days" class="form-label">
+                                            Minimum Retention (days)
+                                            <i class="fas fa-info-circle" data-bs-toggle="tooltip"
+                                            title="Seeding protection: Files must stay on server for at least X days before ANY cleanup can occur."></i>
+                                        </label>
+                                        <input type="number" class="form-control" id="min_retention_days"
+                                            name="min_retention_days" min="1"
+                                            placeholder="Leave empty for no minimum retention">
+                                        <div class="form-text text-muted">
+                                            <small>Protect files for seeding (overrides all cleanup)</small>
                                         </div>
                                     </div>
 
@@ -155,7 +178,8 @@
                                             <strong>🎯 Mix and Match Grace Periods:</strong><br>
                                             • <strong>Watched:</strong> Expire your watched<br>
                                             • <strong>Unwatched:</strong> Pressure to watch new content<br>
-                                            • <strong>Dormant:</strong> Nuclear cleanup for abandoned shows<br><br>
+                                            • <strong>Dormant:</strong> Nuclear cleanup for abandoned shows<br>
+                                            • <strong>Min Retention:</strong> Protect files for seeding<br><br>
                                             <span class="text-warning">⚠️ Use any combination that fits your viewing style</span>
                                         </small>
                                     </div>

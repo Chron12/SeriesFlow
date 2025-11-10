@@ -7,3 +7,11 @@ README.md
 /logs/*
 /temp/*
 /config/*
+
+# IDE files
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

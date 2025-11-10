@@ -431,13 +431,13 @@ def monitor_episodes(episode_ids, monitor=True):
     """Set episodes to monitored or unmonitored in Sonarr."""
     if not episode_ids:
         return
-        
+
     url = f"{SONARR_URL}/api/v3/episode/monitor"
     headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
     data = {"episodeIds": episode_ids, "monitored": monitor}
+    action = "monitored" if monitor else "unmonitored"
     response = requests.put(url, json=data, headers=headers)
     if response.ok:
-        action = "monitored" if monitor else "unmonitored"
         logger.info(f"Episodes {episode_ids} successfully {action}.")
     else:
         logger.error(f"Failed to set episodes {action}. Response: {response.text}")
@@ -545,6 +545,40 @@ def fetch_all_episodes(series_id):
         return response.json()
     logger.error("Failed to fetch all episodes.")
     return []
+
+def get_days_since_file_added(episode):
+    """
+    Calculate days since file was added to Sonarr.
+
+    Args:
+        episode: Episode dict from Sonarr API with episodeFile.dateAdded
+
+    Returns:
+        float: Days since file was added, or None if not available
+    """
+    try:
+        if not episode.get('hasFile') or 'episodeFile' not in episode:
+            return None
+
+        episode_file = episode.get('episodeFile', {})
+        date_added_str = episode_file.get('dateAdded')
+
+        if not date_added_str:
+            return None
+
+        # Parse ISO 8601 datetime from Sonarr
+        from datetime import datetime
+        date_added = datetime.fromisoformat(date_added_str.replace('Z', '+00:00'))
+        current_time = datetime.now(date_added.tzinfo)
+
+        time_diff = current_time - date_added
+        days_since_added = time_diff.total_seconds() / (24 * 60 * 60)
+
+        return days_since_added
+
+    except Exception as e:
+        logger.debug(f"Error calculating file age: {str(e)}")
+        return None
 
 def get_tautulli_last_watched(series_title, return_complete=False):
     """
@@ -996,59 +1030,66 @@ def parse_legacy_value(value):
         except (ValueError, TypeError):
             return 'episodes', 1
 
-def find_episodes_leaving_keep_block(all_episodes, keep_type, keep_count, last_watched_season, last_watched_episode):
+def find_episodes_leaving_keep_block(all_episodes, keep_type, keep_count, last_watched_season, last_watched_episode, keep_season_premieres=False):
     """
     Find episodes that are leaving the keep block using dropdown system.
     These episodes should be deleted immediately (real-time cleanup).
     """
     episodes_leaving = []
-    
+
     try:
         if keep_type == "all":
             # Keep everything, nothing leaves
             return []
-            
+
         elif keep_type == "seasons":
             # Keep X seasons, episodes from older seasons leave
             seasons_to_keep = keep_count if keep_count else 1
             cutoff_season = last_watched_season - seasons_to_keep + 1
-            
+
             episodes_leaving = [
-                ep for ep in all_episodes 
+                ep for ep in all_episodes
                 if ep['seasonNumber'] < cutoff_season and ep.get('hasFile')
             ]
-            
+
         else:  # episodes
             # Keep X episodes, older episodes leave the keep block
             episodes_to_keep = keep_count if keep_count else 1
-            
+
             # Sort episodes by season/episode number
             sorted_episodes = sorted(all_episodes, key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
-            
+
             # Find the last watched episode index
             last_watched_index = None
             for i, ep in enumerate(sorted_episodes):
-                if (ep['seasonNumber'] == last_watched_season and 
+                if (ep['seasonNumber'] == last_watched_season and
                     ep['episodeNumber'] == last_watched_episode):
                     last_watched_index = i
                     break
-            
+
             if last_watched_index is not None:
                 # Keep block: episodes_to_keep episodes ending with the one just watched
                 keep_start_index = max(0, last_watched_index - keep_count + 1)
-                
+
                 # Episodes before the keep block are leaving
                 episodes_with_files = [ep for ep in sorted_episodes if ep.get('hasFile')]
-                
+
                 for ep in episodes_with_files:
                     ep_index = next((i for i, se in enumerate(sorted_episodes) if se['id'] == ep['id']), None)
                     if ep_index is not None and ep_index < keep_start_index:
                         episodes_leaving.append(ep)
-                
+
                 logger.info(f"Keep block: episodes {keep_start_index} to {last_watched_index}, {len(episodes_leaving)} episodes leaving")
-        
+
+        # Filter out season premieres if the option is enabled
+        if keep_season_premieres and episodes_leaving:
+            original_count = len(episodes_leaving)
+            episodes_leaving = [ep for ep in episodes_leaving if ep['episodeNumber'] != 1]
+            if original_count != len(episodes_leaving):
+                logger.info(f"Protected {original_count - len(episodes_leaving)} season premiere(s) from deletion")
+
         return episodes_leaving
-        
+
     except Exception as e:
         logger.error(f"Error finding episodes leaving keep block: {str(e)}")
         return []
@@ -1101,8 +1142,9 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule)
             logger.info(f"Processed {len(next_episode_ids)} next episodes")
         
         # IMMEDIATE DELETION: Episodes leaving keep block (real-time cleanup)
+        keep_season_premieres = rule.get('keep_season_premieres', False)
         episodes_leaving_keep_block = find_episodes_leaving_keep_block(
-            all_episodes, keep_type, keep_count, season_number, episode_number
+            all_episodes, keep_type, keep_count, season_number, episode_number, keep_season_premieres
         )
         
         if episodes_leaving_keep_block:
@@ -1223,11 +1265,12 @@ def run_grace_watched_cleanup():
             grace_watched_days = rule.get('grace_watched')
             if not grace_watched_days:
                 continue
-                
-            cleanup_logger.info(f"📋 Rule '{rule_name}': Checking grace_watched ({grace_watched_days} days)")
+
+            min_retention_days = rule.get('min_retention_days')
+            cleanup_logger.info(f"📋 Rule '{rule_name}': Checking grace_watched ({grace_watched_days} days, min retention: {min_retention_days or 'none'})")
             rule_dry_run = rule.get('dry_run', False)
             is_dry_run = global_dry_run or rule_dry_run
-            
+
             # Check each series in this rule
             series_dict = rule.get('series', {})
             for series_id_str, series_data in series_dict.items():
@@ -1267,19 +1310,34 @@ def run_grace_watched_cleanup():
                         for episode in all_episodes:
                             if not episode.get('hasFile'):
                                 continue
-                                
+
                             season_num = episode.get('seasonNumber', 0)
                             episode_num = episode.get('episodeNumber', 0)
-                            
+
                             # Episode is "watched" if it's at or before the last watched position
                             # This INCLUDES the last watched episode (delete what you've already seen)
-                            if (season_num < last_season or 
+                            if (season_num < last_season or
                                 (season_num == last_season and episode_num <= last_episode)):
                                 watched_episodes.append(episode)
-                        
+
+                        # SEEDING PROTECTION: Filter by minimum retention if configured
+                        eligible_episodes = watched_episodes
+                        if min_retention_days:
+                            eligible_episodes = []
+                            protected_count = 0
+                            for ep in watched_episodes:
+                                days_since_added = get_days_since_file_added(ep)
+                                if days_since_added is None or days_since_added >= min_retention_days:
+                                    eligible_episodes.append(ep)
+                                else:
+                                    protected_count += 1
+
+                            if protected_count > 0:
+                                cleanup_logger.info(f"   🛡️ Protected {protected_count} files (seeding < {min_retention_days} days)")
+
                         # Get episode file IDs for deletion
-                        episode_file_ids = [ep['episodeFileId'] for ep in watched_episodes if 'episodeFileId' in ep]
-                        
+                        episode_file_ids = [ep['episodeFileId'] for ep in eligible_episodes if 'episodeFileId' in ep]
+
                         if episode_file_ids:
                             cleanup_logger.info(f"   📊 Deleting {len(episode_file_ids)} watched episodes up to S{last_season}E{last_episode}")
                             delete_episodes_in_sonarr_with_logging(episode_file_ids, is_dry_run, series_title)
@@ -1324,11 +1382,12 @@ def run_grace_unwatched_cleanup():
             grace_unwatched_days = rule.get('grace_unwatched')
             if not grace_unwatched_days:
                 continue
-                
-            cleanup_logger.info(f"📋 Rule '{rule_name}': Checking grace_unwatched ({grace_unwatched_days} days)")
+
+            min_retention_days = rule.get('min_retention_days')
+            cleanup_logger.info(f"📋 Rule '{rule_name}': Checking grace_unwatched ({grace_unwatched_days} days, min retention: {min_retention_days or 'none'})")
             rule_dry_run = rule.get('dry_run', False)
             is_dry_run = global_dry_run or rule_dry_run
-            
+
             # Check each series in this rule
             series_dict = rule.get('series', {})
             for series_id_str, series_data in series_dict.items():
@@ -1368,18 +1427,33 @@ def run_grace_unwatched_cleanup():
                         for episode in all_episodes:
                             if not episode.get('hasFile'):
                                 continue
-                                
+
                             season_num = episode.get('seasonNumber', 0)
                             episode_num = episode.get('episodeNumber', 0)
-                            
+
                             # Episode is "unwatched" if it's STRICTLY AFTER the last watched position
-                            if (season_num > last_season or 
+                            if (season_num > last_season or
                                 (season_num == last_season and episode_num > last_episode)):
                                 unwatched_episodes.append(episode)
-                        
+
+                        # SEEDING PROTECTION: Filter by minimum retention if configured
+                        eligible_episodes = unwatched_episodes
+                        if min_retention_days:
+                            eligible_episodes = []
+                            protected_count = 0
+                            for ep in unwatched_episodes:
+                                days_since_added = get_days_since_file_added(ep)
+                                if days_since_added is None or days_since_added >= min_retention_days:
+                                    eligible_episodes.append(ep)
+                                else:
+                                    protected_count += 1
+
+                            if protected_count > 0:
+                                cleanup_logger.info(f"   🛡️ Protected {protected_count} files (seeding < {min_retention_days} days)")
+
                         # Get episode file IDs for deletion
-                        episode_file_ids = [ep['episodeFileId'] for ep in unwatched_episodes if 'episodeFileId' in ep]
-                        
+                        episode_file_ids = [ep['episodeFileId'] for ep in eligible_episodes if 'episodeFileId' in ep]
+
                         if episode_file_ids:
                             cleanup_logger.info(f"   📊 Deleting {len(episode_file_ids)} unwatched episodes after S{last_season}E{last_episode}")
                             delete_episodes_in_sonarr_with_logging(episode_file_ids, is_dry_run, series_title)
@@ -1429,35 +1503,55 @@ def run_dormant_cleanup():
             dormant_days = rule.get('dormant_days')
             if not dormant_days:
                 continue
-            
+
+            min_retention_days = rule.get('min_retention_days')
             rule_dry_run = rule.get('dry_run', False)
             is_dry_run = global_dry_run or rule_dry_run
-            
+
             for series_id_str in rule.get('series', {}):
                 try:
                     series_id = int(series_id_str)
                     series_info = next((s for s in all_series if s['id'] == series_id), None)
                     if not series_info:
                         continue
-                    
+
                     activity_date = get_activity_date_with_hierarchy(series_id, series_info['title'])
                     if not activity_date:
                         continue
-                    
+
                     days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
                     if days_since_activity > dormant_days:
                         all_episodes = fetch_all_episodes(series_id)
-                        episode_file_ids = [ep['episodeFileId'] for ep in all_episodes if ep.get('hasFile') and 'episodeFileId' in ep]
-                        
+
+                        # SEEDING PROTECTION: Filter by minimum retention if configured
+                        eligible_episodes = [ep for ep in all_episodes if ep.get('hasFile') and 'episodeFileId' in ep]
+                        if min_retention_days:
+                            filtered_episodes = []
+                            protected_count = 0
+                            for ep in eligible_episodes:
+                                days_since_added = get_days_since_file_added(ep)
+                                if days_since_added is None or days_since_added >= min_retention_days:
+                                    filtered_episodes.append(ep)
+                                else:
+                                    protected_count += 1
+
+                            if protected_count > 0:
+                                cleanup_logger.info(f"   🛡️ {series_info['title']}: Protected {protected_count} files (seeding < {min_retention_days} days)")
+
+                            eligible_episodes = filtered_episodes
+
+                        episode_file_ids = [ep['episodeFileId'] for ep in eligible_episodes]
+
                         if episode_file_ids:
                             candidates.append({
                                 'series_id': series_id,
                                 'title': series_info['title'],
                                 'days_since_activity': days_since_activity,
                                 'episode_file_ids': episode_file_ids,
-                                'is_dry_run': is_dry_run
+                                'is_dry_run': is_dry_run,
+                                'min_retention_days': min_retention_days
                             })
-                            
+
                 except (ValueError, TypeError):
                     continue
         

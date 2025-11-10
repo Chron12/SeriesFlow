@@ -1,4 +1,4 @@
-__version__ = "2.5.6"
+__version__ = "2.6.0"
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import subprocess
 import os
@@ -370,10 +370,11 @@ def load_config():
                 'default': {
                     'get_type': 'episodes',
                     'get_count': 1,
-                    'keep_type': 'episodes', 
+                    'keep_type': 'episodes',
                     'keep_count': 1,
                     'action_option': 'search',
                     'monitor_watched': False,
+                    'keep_season_premieres': False,
                     'grace_watched': None,
                     'grace_unwatched': None,
                     'dormant_days': None,
@@ -517,11 +518,13 @@ def create_rule():
         grace_watched = request.form.get('grace_watched', '').strip()
         grace_unwatched = request.form.get('grace_unwatched', '').strip()
         dormant_days = request.form.get('dormant_days', '').strip()
-        
+        min_retention_days = request.form.get('min_retention_days', '').strip()
+
         grace_watched = None if not grace_watched else int(grace_watched)
         grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
         dormant_days = None if not dormant_days else int(dormant_days)
-        
+        min_retention_days = None if not min_retention_days else int(min_retention_days)
+
         # Save rule
         config['rules'][rule_name] = {
             'get_type': get_type,
@@ -530,9 +533,11 @@ def create_rule():
             'keep_count': keep_count,
             'action_option': request.form.get('action_option', 'monitor'),
             'monitor_watched': 'monitor_watched' in request.form,
+            'keep_season_premieres': 'keep_season_premieres' in request.form,
             'grace_watched': grace_watched,
             'grace_unwatched': grace_unwatched,
             'dormant_days': dormant_days,
+            'min_retention_days': min_retention_days,
             'series': {},
             'dry_run': False
         }
@@ -573,11 +578,13 @@ def edit_rule(rule_name):
         grace_watched = request.form.get('grace_watched', '').strip()
         grace_unwatched = request.form.get('grace_unwatched', '').strip()
         dormant_days = request.form.get('dormant_days', '').strip()
-        
+        min_retention_days = request.form.get('min_retention_days', '').strip()
+
         grace_watched = None if not grace_watched else int(grace_watched)
         grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
         dormant_days = None if not dormant_days else int(dormant_days)
-        
+        min_retention_days = None if not min_retention_days else int(min_retention_days)
+
         # Update rule
         config['rules'][rule_name].update({
             'get_type': get_type,
@@ -586,9 +593,11 @@ def edit_rule(rule_name):
             'keep_count': keep_count,
             'action_option': request.form.get('action_option', 'monitor'),
             'monitor_watched': 'monitor_watched' in request.form,
+            'keep_season_premieres': 'keep_season_premieres' in request.form,
             'grace_watched': grace_watched,
             'grace_unwatched': grace_unwatched,
-            'dormant_days': dormant_days
+            'dormant_days': dormant_days,
+            'min_retention_days': min_retention_days
         })
         
         # Handle default rule setting
