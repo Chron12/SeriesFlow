@@ -1671,19 +1671,6 @@ def process_sonarr_webhook():
         
         app.logger.info(f"Processing series addition: {series_title} (ID: {series_id}, TVDB: {tvdb_id})")
 
-        # Extract monitored seasons from Sonarr webhook
-        # The series object contains a 'seasons' array with monitoring status
-        sonarr_monitored_seasons = []
-        seasons_data = series.get('seasons', [])
-        for season in seasons_data:
-            season_num = season.get('seasonNumber', 0)
-            is_monitored = season.get('monitored', False)
-            # Only include monitored seasons, skip specials (season 0)
-            if is_monitored and season_num > 0:
-                sonarr_monitored_seasons.append(season_num)
-
-        app.logger.info(f"Sonarr monitored seasons for {series_title}: {sonarr_monitored_seasons}")
-
         # Setup Sonarr connection
         sonarr_preferences = sonarr_utils.load_preferences()
         headers = {
@@ -1691,6 +1678,26 @@ def process_sonarr_webhook():
             'Content-Type': 'application/json'
         }
         sonarr_url = sonarr_preferences['SONARR_URL']
+
+        # Query Sonarr API to get current season monitoring status
+        # This is more reliable than webhook data, especially if user sets monitoring after adding
+        sonarr_monitored_seasons = []
+        try:
+            series_response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+            if series_response.ok:
+                series_data = series_response.json()
+                seasons_data = series_data.get('seasons', [])
+                for season in seasons_data:
+                    season_num = season.get('seasonNumber', 0)
+                    is_monitored = season.get('monitored', False)
+                    # Only include monitored seasons, skip specials (season 0)
+                    if is_monitored and season_num > 0:
+                        sonarr_monitored_seasons.append(season_num)
+                app.logger.info(f"Sonarr monitored seasons for {series_title}: {sonarr_monitored_seasons}")
+            else:
+                app.logger.warning(f"Could not fetch series details from Sonarr: {series_response.status_code}")
+        except Exception as e:
+            app.logger.error(f"Error fetching season monitoring from Sonarr: {str(e)}")
 
         # Get all tags from Sonarr to map IDs to labels
         tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
