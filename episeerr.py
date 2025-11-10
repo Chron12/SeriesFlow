@@ -1670,7 +1670,20 @@ def process_sonarr_webhook():
         series_title = series.get('title')
         
         app.logger.info(f"Processing series addition: {series_title} (ID: {series_id}, TVDB: {tvdb_id})")
-        
+
+        # Extract monitored seasons from Sonarr webhook
+        # The series object contains a 'seasons' array with monitoring status
+        sonarr_monitored_seasons = []
+        seasons_data = series.get('seasons', [])
+        for season in seasons_data:
+            season_num = season.get('seasonNumber', 0)
+            is_monitored = season.get('monitored', False)
+            # Only include monitored seasons, skip specials (season 0)
+            if is_monitored and season_num > 0:
+                sonarr_monitored_seasons.append(season_num)
+
+        app.logger.info(f"Sonarr monitored seasons for {series_title}: {sonarr_monitored_seasons}")
+
         # Setup Sonarr connection
         sonarr_preferences = sonarr_utils.load_preferences()
         headers = {
@@ -1912,20 +1925,29 @@ def process_sonarr_webhook():
                                         seasons_dict[season_num].append(ep)
 
                                 # Get first episode of each season
-                                # If we have Jellyseerr requested seasons, only monitor those
-                                # Otherwise, monitor first episode of ALL seasons
+                                # Priority: 1) Sonarr monitored seasons, 2) Jellyseerr requested seasons, 3) ALL seasons
                                 seasons_to_monitor = sorted(seasons_dict.keys())
-                                if jellyseerr_requested_seasons:
-                                    # Filter to only requested seasons
+                                season_source = "all"
+
+                                if sonarr_monitored_seasons:
+                                    # Use Sonarr's season monitoring status (from manual add)
+                                    seasons_to_monitor = [s for s in seasons_to_monitor if s in sonarr_monitored_seasons]
+                                    season_source = "sonarr"
+                                    app.logger.info(f"Sonarr manual add: Using Sonarr monitored seasons {sonarr_monitored_seasons}")
+                                elif jellyseerr_requested_seasons:
+                                    # Use Jellyseerr requested seasons
                                     seasons_to_monitor = [s for s in seasons_to_monitor if s in jellyseerr_requested_seasons]
-                                    app.logger.info(f"Jellyseerr request: Filtering to requested seasons {jellyseerr_requested_seasons}")
+                                    season_source = "jellyseerr"
+                                    app.logger.info(f"Jellyseerr request: Using requested seasons {jellyseerr_requested_seasons}")
 
                                 for season_num in seasons_to_monitor:
                                     season_episodes = sorted(seasons_dict[season_num], key=lambda x: x.get('episodeNumber', 0))
                                     if season_episodes:
                                         episodes_to_monitor.append(season_episodes[0]['id'])
 
-                                if jellyseerr_requested_seasons:
+                                if season_source == "sonarr":
+                                    app.logger.info(f"Initial add (Sonarr): Monitoring first episode of monitored seasons {seasons_to_monitor} for {series_title}")
+                                elif season_source == "jellyseerr":
                                     app.logger.info(f"Initial add (Jellyseerr): Monitoring first episode of requested seasons {seasons_to_monitor} for {series_title}")
                                 else:
                                     app.logger.info(f"Initial add: Monitoring first episode of {len(episodes_to_monitor)} seasons for {series_title}")
