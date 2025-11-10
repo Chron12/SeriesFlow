@@ -1380,22 +1380,44 @@ def select_episodes(tmdb_id):
         # Find the corresponding series_id from pending requests
         series_id = None
         request_id = None
-        
+        tvdb_id = None
+
         for filename in os.listdir(REQUESTS_DIR):
             if filename.endswith('.json'):
                 try:
                     with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
                         request_data = json.load(f)
                         if str(request_data.get('tmdb_id')) == str(tmdb_id):
-                            series_id = request_data.get('series_id')
-                            request_id = request_data.get('id')
-                            app.logger.info(f"Found matching request: series_id={series_id}, request_id={request_id}")
+                            # Try both 'series_id' and 'id' fields (different request types)
+                            series_id = request_data.get('series_id') or request_data.get('id')
+                            request_id = request_data.get('request_id') or request_data.get('id')
+                            tvdb_id = request_data.get('tvdb_id')
+                            app.logger.info(f"Found matching request: series_id={series_id}, request_id={request_id}, tvdb_id={tvdb_id}")
                             break
                 except Exception as e:
                     app.logger.error(f"Error reading request file {filename}: {str(e)}")
-        
-        if not series_id or not request_id:
+
+        if not request_id:
             return render_template('error.html', message="No pending request found for this series")
+
+        # If series_id is not in the request file, look it up from Sonarr using TVDB ID
+        if not series_id and tvdb_id:
+            app.logger.info(f"Looking up series_id in Sonarr for TVDB ID: {tvdb_id}")
+            headers = {'X-Api-Key': SONARR_API_KEY}
+            try:
+                response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+                if response.ok:
+                    all_series = response.json()
+                    for series in all_series:
+                        if str(series.get('tvdbId')) == str(tvdb_id):
+                            series_id = series.get('id')
+                            app.logger.info(f"Found series_id {series_id} for TVDB ID {tvdb_id}")
+                            break
+            except Exception as e:
+                app.logger.error(f"Error looking up series in Sonarr: {str(e)}")
+
+        if not series_id:
+            return render_template('error.html', message="Series not found in Sonarr. Please make sure the series is added.")
         
         # Get TV show details from TMDB
         show_data = get_tmdb_endpoint(f"tv/{tmdb_id}")
