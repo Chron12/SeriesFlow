@@ -1699,21 +1699,29 @@ def process_sonarr_webhook():
 
         for tag in series_tags:
             if isinstance(tag, int):
-                # Tag is an ID - check against stored global IDs
-                if tag == EPISEERR_DEFAULT_TAG_ID:
+                # Tag is an ID - look up the label from the mapping
+                tag_label = tag_mapping.get(tag, '').lower()
+                if tag_label == 'episeerr_default':
                     has_episeerr_default = True
-                    break
-                elif tag == EPISEERR_SELECT_TAG_ID:
+                    app.logger.info(f"Found episeerr_default tag (ID: {tag}) for {series_title}")
+                elif tag_label == 'episeerr_select':
                     has_episeerr_select = True
-                    break
+                    app.logger.info(f"Found episeerr_select tag (ID: {tag}) for {series_title}")
+                # Also check against stored global IDs if they exist
+                if EPISEERR_DEFAULT_TAG_ID and tag == EPISEERR_DEFAULT_TAG_ID:
+                    has_episeerr_default = True
+                    app.logger.info(f"Found episeerr_default tag via global ID for {series_title}")
+                elif EPISEERR_SELECT_TAG_ID and tag == EPISEERR_SELECT_TAG_ID:
+                    has_episeerr_select = True
+                    app.logger.info(f"Found episeerr_select tag via global ID for {series_title}")
             else:
                 # Tag is a string name - check the name directly
                 if str(tag).lower() == 'episeerr_default':
                     has_episeerr_default = True
-                    break
+                    app.logger.info(f"Found episeerr_default tag (string) for {series_title}")
                 elif str(tag).lower() == 'episeerr_select':
                     has_episeerr_select = True
-                    break
+                    app.logger.info(f"Found episeerr_select tag (string) for {series_title}")
 
         # If no episeerr tags, check if auto-assign is enabled
         if not has_episeerr_default and not has_episeerr_select:
