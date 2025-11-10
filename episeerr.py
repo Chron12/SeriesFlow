@@ -1599,6 +1599,9 @@ def get_pending_requests():
                 try:
                     with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
                         request_data = json.load(f)
+                        # Add needs_season_selection flag if not present (for Jellyseerr requests)
+                        if 'needs_season_selection' not in request_data:
+                            request_data['needs_season_selection'] = True
                         pending_requests.append(request_data)
                 except Exception as e:
                     app.logger.error(f"Error reading request file {filename}: {str(e)}")
