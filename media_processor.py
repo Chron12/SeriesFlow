@@ -1437,7 +1437,9 @@ def is_dry_run_enabled(rule_name=None):
 
 
 def delete_episodes_in_sonarr_with_logging(
-        episode_file_ids, dry_run, series_title):
+    episode_file_ids, dry_run, series_title,
+    series_id=None, cleanup_type=None, reason=None, rule_name=None
+):
     """Delete episodes with detailed logging."""
     if not episode_file_ids:
         return
@@ -1475,6 +1477,18 @@ def delete_episodes_in_sonarr_with_logging(
             len(failed_deletes)} failed")
     if failed_deletes:
         print(f"❌ Failed deletes: {failed_deletes}")
+
+    # Log to activity log (only for actual deletions, not dry runs)
+    if not dry_run and successful_deletes > 0 and cleanup_type:
+        log_cleanup_activity(
+            cleanup_type=cleanup_type,
+            series_id=series_id,
+            series_title=series_title,
+            episode_count=successful_deletes,
+            reason=reason or "Cleanup triggered",
+            dry_run=dry_run,
+            rule_name=rule_name
+        )
 
 # ============================================================================
 # CLEANUP FUNCTIONS - Your new simplified 3-function system
@@ -1601,7 +1615,13 @@ def run_grace_watched_cleanup():
                                 f"   📊 Deleting {
                                     len(episode_file_ids)} watched episodes up to S{last_season}E{last_episode}")
                             delete_episodes_in_sonarr_with_logging(
-                                episode_file_ids, is_dry_run, series_title)
+                                episode_file_ids, is_dry_run, series_title,
+                                series_id=series_id,
+                                cleanup_type="grace_watched",
+                                reason=f"Inactive for {
+                                    days_since_activity:.1f} days (threshold: {grace_watched_days})",
+                                rule_name=rule_name
+                            )
                             total_deleted += len(episode_file_ids)
                         else:
                             cleanup_logger.info(
@@ -1744,7 +1764,13 @@ def run_grace_unwatched_cleanup():
                                 f"   📊 Deleting {
                                     len(episode_file_ids)} unwatched episodes after S{last_season}E{last_episode}")
                             delete_episodes_in_sonarr_with_logging(
-                                episode_file_ids, is_dry_run, series_title)
+                                episode_file_ids, is_dry_run, series_title,
+                                series_id=series_id,
+                                cleanup_type="grace_unwatched",
+                                reason=f"Inactive for {
+                                    days_since_activity:.1f} days (threshold: {grace_unwatched_days})",
+                                rule_name=rule_name
+                            )
                             total_deleted += len(episode_file_ids)
                         else:
                             cleanup_logger.info(
@@ -1880,7 +1906,11 @@ def run_dormant_cleanup():
             delete_episodes_in_sonarr_with_logging(
                 candidate['episode_file_ids'],
                 candidate['is_dry_run'],
-                candidate['title'])
+                candidate['title'],
+                series_id=candidate['series_id'],
+                cleanup_type="dormant",
+                reason=f"Dormant for {candidate['days_since_activity']:.1f} days"
+            )
             processed_count += 1
 
         cleanup_logger.info(
@@ -2039,6 +2069,87 @@ def get_sonarr_disk_space():
     except Exception as e:
         logger.error(f"Error getting disk space: {str(e)}")
         return None
+
+
+# Activity Log Functions
+ACTIVITY_LOG_PATH = os.path.join(os.getcwd(), 'data', 'activity_log.json')
+ACTIVITY_RETENTION_DAYS = 30
+
+
+def load_activity_log():
+    """Load activity log from JSON file."""
+    try:
+        if os.path.exists(ACTIVITY_LOG_PATH):
+            with open(ACTIVITY_LOG_PATH, 'r') as f:
+                return json.load(f)
+        return {"version": 1, "last_pruned": int(time.time()), "events": []}
+    except Exception as e:
+        logger.error(f"Error loading activity log: {str(e)}")
+        return {"version": 1, "last_pruned": int(time.time()), "events": []}
+
+
+def save_activity_log(log_data):
+    """Save activity log to JSON file."""
+    try:
+        os.makedirs(os.path.dirname(ACTIVITY_LOG_PATH), exist_ok=True)
+        with open(ACTIVITY_LOG_PATH, 'w') as f:
+            json.dump(log_data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving activity log: {str(e)}")
+
+
+def prune_activity_log(log_data):
+    """Remove events older than ACTIVITY_RETENTION_DAYS."""
+    cutoff = int(time.time()) - (ACTIVITY_RETENTION_DAYS * 24 * 60 * 60)
+    original_count = len(log_data.get('events', []))
+    log_data['events'] = [
+        e for e in log_data.get('events', [])
+        if e.get('timestamp', 0) > cutoff
+    ]
+    pruned_count = original_count - len(log_data['events'])
+    if pruned_count > 0:
+        logger.info(f"Pruned {pruned_count} old activity events")
+    log_data['last_pruned'] = int(time.time())
+    return log_data
+
+
+def log_cleanup_activity(
+    cleanup_type,
+    series_id,
+    series_title,
+    episode_count,
+    reason,
+    dry_run,
+    rule_name=None
+):
+    """Log a cleanup activity event."""
+    try:
+        import uuid
+        log_data = load_activity_log()
+
+        # Prune old events periodically (once per day)
+        if int(time.time()) - log_data.get('last_pruned', 0) > 86400:
+            log_data = prune_activity_log(log_data)
+
+        event = {
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time()),
+            "event_type": "cleanup",
+            "cleanup_type": cleanup_type,
+            "series_id": series_id,
+            "series_title": series_title,
+            "episode_count": episode_count,
+            "reason": reason,
+            "dry_run": dry_run,
+            "rule_name": rule_name
+        }
+
+        log_data['events'].insert(0, event)  # Most recent first
+        save_activity_log(log_data)
+        logger.debug(f"Logged cleanup activity: {series_title} ({episode_count} episodes)")
+
+    except Exception as e:
+        logger.error(f"Error logging cleanup activity: {str(e)}")
 
 
 def run_unified_cleanup():

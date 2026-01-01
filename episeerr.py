@@ -1107,18 +1107,132 @@ def get_series_with_titles():
 
 @app.route('/api/recent-activity')
 def get_recent_activity():
-    """Get recent activity (simplified version)."""
+    """Get recent activity for banner notifications."""
     try:
+        import media_processor
+        log_data = media_processor.load_activity_log()
+        events = log_data.get('events', [])[:5]  # Last 5 events
+
         return jsonify({
             "recentDownloads": [],
-            "recentRuleApplications": []
+            "recentRuleApplications": [],
+            "recentCleanups": [
+                {
+                    "timestamp": time.strftime('%Y-%m-%d %H:%M', time.localtime(e.get('timestamp', 0))),
+                    "type": e.get('cleanup_type', 'unknown').replace('_', ' ').title(),
+                    "series": e.get('series_title', 'Unknown'),
+                    "episodes": e.get('episode_count', 0),
+                    "dry_run": e.get('dry_run', False)
+                }
+                for e in events
+            ]
         })
     except Exception as e:
         app.logger.error(f"Error getting recent activity: {str(e)}")
         return jsonify({
             "recentDownloads": [],
-            "recentRuleApplications": []
-        }), 500
+            "recentRuleApplications": [],
+            "recentCleanups": []
+        })
+
+
+@app.route('/api/activity-log')
+def get_activity_log():
+    """Get activity log with optional filters."""
+    try:
+        import media_processor
+        log_data = media_processor.load_activity_log()
+
+        # Parse query parameters
+        cleanup_type = request.args.get('cleanup_type')
+        series_id = request.args.get('series_id')
+        start_date = request.args.get('start_date')  # Unix timestamp
+        end_date = request.args.get('end_date')      # Unix timestamp
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+
+        events = log_data.get('events', [])
+
+        # Apply filters
+        if cleanup_type:
+            events = [e for e in events if e.get('cleanup_type') == cleanup_type]
+        if series_id:
+            events = [e for e in events if str(e.get('series_id')) == str(series_id)]
+        if start_date:
+            events = [e for e in events if e.get('timestamp', 0) >= int(start_date)]
+        if end_date:
+            events = [e for e in events if e.get('timestamp', 0) <= int(end_date)]
+
+        # Calculate summary stats (from all filtered events, not just paginated)
+        all_events = log_data.get('events', [])
+        total_episodes = sum(e.get('episode_count', 0) for e in all_events if not e.get('dry_run'))
+
+        # Paginate
+        total_count = len(events)
+        events = events[offset:offset + limit]
+
+        return jsonify({
+            "status": "success",
+            "events": events,
+            "total_count": total_count,
+            "summary": {
+                "total_episodes_deleted": total_episodes,
+                "events_by_type": {
+                    "grace_watched": len([e for e in all_events if e.get('cleanup_type') == 'grace_watched' and not e.get('dry_run')]),
+                    "grace_unwatched": len([e for e in all_events if e.get('cleanup_type') == 'grace_unwatched' and not e.get('dry_run')]),
+                    "dormant": len([e for e in all_events if e.get('cleanup_type') == 'dormant' and not e.get('dry_run')])
+                }
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting activity log: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/activity-log/stats')
+def get_activity_stats():
+    """Get aggregated activity statistics for charts."""
+    try:
+        import media_processor
+        from collections import defaultdict
+
+        log_data = media_processor.load_activity_log()
+        events = log_data.get('events', [])
+
+        # Group by day for chart data
+        daily_stats = defaultdict(lambda: {"count": 0, "episodes": 0})
+
+        for event in events:
+            if event.get('dry_run'):
+                continue
+            ts = event.get('timestamp', 0)
+            day_key = time.strftime('%Y-%m-%d', time.localtime(ts))
+            daily_stats[day_key]['count'] += 1
+            daily_stats[day_key]['episodes'] += event.get('episode_count', 0)
+
+        # Convert to sorted list
+        chart_data = [
+            {
+                "date": k,
+                "cleanup_count": v['count'],
+                "episodes_deleted": v['episodes']
+            }
+            for k, v in sorted(daily_stats.items())
+        ]
+
+        return jsonify({
+            "status": "success",
+            "chart_data": chart_data[-30:]  # Last 30 days
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting activity stats: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/activity-dashboard')
+def activity_dashboard():
+    """Activity dashboard page."""
+    return render_template('activity_dashboard.html')
 
 
 @app.route('/api/series-stats')

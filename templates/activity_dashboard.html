@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+
+{% block title %}Activity Dashboard - SeriesFlow{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Summary Stats Row -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="fas fa-chart-line me-2"></i>Cleanup Activity Dashboard</h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-light" onclick="refreshDashboard()">
+                        <i class="fas fa-sync-alt me-1"></i>Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row text-center" id="summary-stats">
+                    <div class="col-md-3">
+                        <div class="stat-card">
+                            <h3 id="total-events">-</h3>
+                            <small class="text-muted">Total Cleanup Events</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stat-card">
+                            <h3 id="total-episodes">-</h3>
+                            <small class="text-muted">Episodes Deleted</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stat-card">
+                            <h3 id="watched-count">-</h3>
+                            <small class="text-muted">Grace Watched</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="stat-card">
+                            <h3 id="dormant-count">-</h3>
+                            <small class="text-muted">Dormant</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Filters -->
+    <div class="col-md-3 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-filter me-2"></i>Filters</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Cleanup Type</label>
+                    <select class="form-select form-select-sm" id="filter-type" onchange="applyFilters()">
+                        <option value="">All Types</option>
+                        <option value="grace_watched">Grace Watched</option>
+                        <option value="grace_unwatched">Grace Unwatched</option>
+                        <option value="dormant">Dormant</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Date Range</label>
+                    <select class="form-select form-select-sm" id="filter-date" onchange="applyFilters()">
+                        <option value="7">Last 7 days</option>
+                        <option value="14">Last 14 days</option>
+                        <option value="30" selected>Last 30 days</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Series</label>
+                    <input type="text" class="form-control form-control-sm"
+                           id="filter-series" placeholder="Search series..." oninput="debounceFilter()">
+                </div>
+            </div>
+        </div>
+
+        <!-- Type Breakdown -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6><i class="fas fa-pie-chart me-2"></i>By Type</h6>
+            </div>
+            <div class="card-body">
+                <div id="type-breakdown">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span><i class="fas fa-eye me-1 text-warning"></i>Grace Watched</span>
+                        <span class="badge bg-warning text-dark" id="count-watched">0</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span><i class="fas fa-eye-slash me-1 text-info"></i>Grace Unwatched</span>
+                        <span class="badge bg-info" id="count-unwatched">0</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span><i class="fas fa-moon me-1 text-danger"></i>Dormant</span>
+                        <span class="badge bg-danger" id="count-dormant">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Activity Timeline -->
+    <div class="col-md-9">
+        <!-- Simple Bar Chart -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h6><i class="fas fa-chart-bar me-2"></i>Cleanup Over Time</h6>
+            </div>
+            <div class="card-body">
+                <div id="chart-container" style="height: 200px; overflow-x: auto;">
+                    <div id="activity-chart" class="d-flex align-items-end justify-content-end" style="height: 180px; min-width: 100%;">
+                        <!-- Chart bars will be rendered here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6><i class="fas fa-history me-2"></i>Activity Timeline</h6>
+                <small class="text-muted" id="timeline-count">Loading...</small>
+            </div>
+            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                <div id="activity-timeline">
+                    <div class="text-center py-4">
+                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                        <span class="ms-2">Loading activity...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentFilters = {
+    cleanup_type: '',
+    days: 30,
+    series: ''
+};
+let filterTimeout = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+});
+
+function debounceFilter() {
+    clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(applyFilters, 300);
+}
+
+async function loadDashboard() {
+    await Promise.all([
+        loadActivityLog(),
+        loadChartData()
+    ]);
+}
+
+async function loadActivityLog() {
+    try {
+        const params = new URLSearchParams();
+        if (currentFilters.cleanup_type) {
+            params.append('cleanup_type', currentFilters.cleanup_type);
+        }
+        if (currentFilters.days) {
+            const startDate = Math.floor(Date.now() / 1000) - (currentFilters.days * 86400);
+            params.append('start_date', startDate);
+        }
+        params.append('limit', '100');
+
+        const response = await fetch(`/api/activity-log?${params}`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            updateSummaryStats(data.summary, data.total_count);
+            updateTypeBreakdown(data.summary.events_by_type);
+            renderTimeline(data.events);
+        }
+    } catch (error) {
+        console.error('Error loading activity log:', error);
+    }
+}
+
+async function loadChartData() {
+    try {
+        const response = await fetch('/api/activity-log/stats');
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            renderChart(data.chart_data);
+        }
+    } catch (error) {
+        console.error('Error loading chart data:', error);
+    }
+}
+
+function updateSummaryStats(summary, totalCount) {
+    document.getElementById('total-events').textContent = totalCount;
+    document.getElementById('total-episodes').textContent = summary.total_episodes_deleted;
+    document.getElementById('watched-count').textContent = summary.events_by_type.grace_watched || 0;
+    document.getElementById('dormant-count').textContent = summary.events_by_type.dormant || 0;
+}
+
+function updateTypeBreakdown(byType) {
+    document.getElementById('count-watched').textContent = byType.grace_watched || 0;
+    document.getElementById('count-unwatched').textContent = byType.grace_unwatched || 0;
+    document.getElementById('count-dormant').textContent = byType.dormant || 0;
+}
+
+function renderTimeline(events) {
+    const container = document.getElementById('activity-timeline');
+    const countEl = document.getElementById('timeline-count');
+
+    // Filter by series name if specified
+    let filteredEvents = events;
+    if (currentFilters.series) {
+        const search = currentFilters.series.toLowerCase();
+        filteredEvents = events.filter(e =>
+            e.series_title && e.series_title.toLowerCase().includes(search)
+        );
+    }
+
+    countEl.textContent = `${filteredEvents.length} events`;
+
+    if (filteredEvents.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-4 text-muted">
+                <i class="fas fa-inbox fa-3x mb-3"></i>
+                <p>No cleanup activity found for the selected filters.</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div class="timeline">';
+
+    filteredEvents.forEach(event => {
+        const date = new Date(event.timestamp * 1000);
+        const dateStr = date.toLocaleDateString();
+        const timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+        const typeIcon = getTypeIcon(event.cleanup_type);
+        const typeClass = getTypeClass(event.cleanup_type);
+        const dryRunBadge = event.dry_run ?
+            '<span class="badge bg-secondary ms-2">DRY RUN</span>' : '';
+
+        html += `
+            <div class="timeline-item mb-3 p-3 border rounded ${typeClass}-border">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="mb-1">
+                            <i class="${typeIcon} me-2 ${typeClass}-text"></i>
+                            ${event.series_title}
+                            ${dryRunBadge}
+                        </h6>
+                        <small class="text-muted">
+                            ${event.cleanup_type.replace('_', ' ').toUpperCase()} -
+                            ${event.episode_count} episode${event.episode_count !== 1 ? 's' : ''}
+                            ${event.rule_name ? ' - Rule: ' + event.rule_name : ''}
+                        </small>
+                    </div>
+                    <div class="text-end">
+                        <div class="small">${dateStr}</div>
+                        <div class="small text-muted">${timeStr}</div>
+                    </div>
+                </div>
+                <div class="mt-2 small text-muted">
+                    <i class="fas fa-info-circle me-1"></i>${event.reason}
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function renderChart(chartData) {
+    const container = document.getElementById('activity-chart');
+
+    if (!chartData || chartData.length === 0) {
+        container.innerHTML = '<div class="text-muted text-center w-100 align-self-center">No data available</div>';
+        return;
+    }
+
+    const maxEpisodes = Math.max(...chartData.map(d => d.episodes_deleted), 1);
+
+    let html = '';
+    chartData.forEach(day => {
+        const height = Math.max((day.episodes_deleted / maxEpisodes) * 150, 5);
+        const date = new Date(day.date).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+
+        html += `
+            <div class="chart-bar-container text-center mx-1" style="min-width: 40px;">
+                <div class="chart-bar bg-primary"
+                     style="height: ${height}px; width: 30px; margin: 0 auto; border-radius: 4px 4px 0 0;"
+                     title="${day.episodes_deleted} episodes on ${day.date}">
+                </div>
+                <small class="text-muted d-block" style="font-size: 0.7em;">${date}</small>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+function getTypeIcon(type) {
+    switch(type) {
+        case 'grace_watched': return 'fas fa-eye';
+        case 'grace_unwatched': return 'fas fa-eye-slash';
+        case 'dormant': return 'fas fa-moon';
+        default: return 'fas fa-trash';
+    }
+}
+
+function getTypeClass(type) {
+    switch(type) {
+        case 'grace_watched': return 'warning';
+        case 'grace_unwatched': return 'info';
+        case 'dormant': return 'danger';
+        default: return 'secondary';
+    }
+}
+
+function applyFilters() {
+    currentFilters.cleanup_type = document.getElementById('filter-type').value;
+    currentFilters.days = parseInt(document.getElementById('filter-date').value);
+    currentFilters.series = document.getElementById('filter-series').value;
+    loadActivityLog();
+}
+
+function refreshDashboard() {
+    loadDashboard();
+}
+</script>
+
+<style>
+.stat-card {
+    padding: 15px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+}
+
+.stat-card h3 {
+    margin-bottom: 5px;
+    color: var(--accent-primary);
+}
+
+.timeline-item {
+    background: var(--bg-secondary);
+    transition: transform 0.2s;
+}
+
+.timeline-item:hover {
+    transform: translateX(5px);
+}
+
+.warning-border {
+    border-left: 4px solid #ffc107 !important;
+}
+
+.info-border {
+    border-left: 4px solid #17a2b8 !important;
+}
+
+.danger-border {
+    border-left: 4px solid #dc3545 !important;
+}
+
+.warning-text {
+    color: #ffc107;
+}
+
+.info-text {
+    color: #17a2b8;
+}
+
+.danger-text {
+    color: #dc3545;
+}
+
+.chart-bar-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}
+
+.chart-bar:hover {
+    opacity: 0.8;
+}
+</style>
+{% endblock %}
