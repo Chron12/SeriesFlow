@@ -81,35 +81,74 @@ def get_sonarr_headers():
     }
 
 
+# Cache for Sonarr tags to reduce duplicate API calls
+_tags_cache = None
+
+
+def _get_sonarr_tags(headers, force_refresh=False):
+    """
+    Fetch tags from Sonarr with caching to reduce API calls.
+
+    :param headers: Sonarr API headers
+    :param force_refresh: If True, invalidate cache and fetch fresh data
+    :return: List of tags or empty list on failure
+    """
+    global _tags_cache
+    if _tags_cache is None or force_refresh:
+        try:
+            logger.debug(f"Fetching tags from {SONARR_URL}/api/v3/tag")
+            response = requests.get(
+                f"{SONARR_URL}/api/v3/tag",
+                headers=headers,
+                timeout=10
+            )
+            if response.ok:
+                _tags_cache = response.json()
+                logger.debug(f"Cached {len(_tags_cache)} tags from Sonarr")
+            else:
+                logger.error(
+                    f"Failed to get tags. Status: {response.status_code}, "
+                    f"Response: {response.text}"
+                )
+                _tags_cache = []
+        except requests.Timeout:
+            logger.error("Request to Sonarr timed out while fetching tags")
+            _tags_cache = []
+        except Exception as e:
+            logger.error(f"Error fetching tags: {str(e)}")
+            _tags_cache = []
+    return _tags_cache or []
+
+
+def _invalidate_tags_cache():
+    """Invalidate the tags cache, forcing a refresh on next fetch."""
+    global _tags_cache
+    _tags_cache = None
+    logger.debug("Tags cache invalidated")
+
+
 def create_episeerr_default_tag():
     """Create a single 'episeerr_default' tag in Sonarr and return its ID."""
     global EPISEERR_DEFAULT_TAG_ID
+
+    headers = get_sonarr_headers()
 
     if not AUTO_CREATE_TAGS:
         logger.debug(
             "Tag auto-creation disabled, checking for existing episeerr_default tag")
         # Still check if tag exists, just don't create it
-        try:
-            headers = get_sonarr_headers()
-            tags_response = requests.get(
-                f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
+        tags = _get_sonarr_tags(headers)
+        for tag in tags:
+            if tag['label'].lower() == 'episeerr_default':
+                EPISEERR_DEFAULT_TAG_ID = tag['id']
+                logger.info(
+                    f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
+                return EPISEERR_DEFAULT_TAG_ID
 
-            if tags_response.ok:
-                for tag in tags_response.json():
-                    if tag['label'].lower() == 'episeerr_default':
-                        EPISEERR_DEFAULT_TAG_ID = tag['id']
-                        logger.info(
-                            f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
-                        return EPISEERR_DEFAULT_TAG_ID
-
-            logger.warning(
-                "episeerr_default tag not found. Please create manually "
-                "in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
-            return None
-
-        except Exception as e:
-            logger.warning(f"Could not check for existing tags: {str(e)}")
-            return None
+        logger.warning(
+            "episeerr_default tag not found. Please create manually "
+            "in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
+        return None
 
     # Original auto-creation logic (when AUTO_CREATE_TAGS=true)
     if EPISEERR_DEFAULT_TAG_ID is not None:
@@ -118,23 +157,9 @@ def create_episeerr_default_tag():
         return EPISEERR_DEFAULT_TAG_ID
 
     try:
-        headers = get_sonarr_headers()
-        logger.debug(
-            f"Making GET request to {SONARR_URL}/api/v3/tag to fetch existing tags")
+        tags = _get_sonarr_tags(headers)
 
-        tags_response = requests.get(
-            f"{SONARR_URL}/api/v3/tag",
-            headers=headers,
-            timeout=10)
-
-        if not tags_response.ok:
-            logger.error(
-                f"Failed to get tags. Status: {
-                    tags_response.status_code}, Response: {
-                    tags_response.text}")
-            return None
-
-        for tag in tags_response.json():
+        for tag in tags:
             if tag['label'].lower() == 'episeerr_default':
                 EPISEERR_DEFAULT_TAG_ID = tag['id']
                 logger.info(
@@ -150,6 +175,7 @@ def create_episeerr_default_tag():
         )
         if tag_create_response.ok:
             EPISEERR_DEFAULT_TAG_ID = tag_create_response.json().get('id')
+            _invalidate_tags_cache()  # Invalidate cache after creating new tag
             logger.info(
                 f"Created tag: 'episeerr_default' with ID {EPISEERR_DEFAULT_TAG_ID}")
             return EPISEERR_DEFAULT_TAG_ID
@@ -173,30 +199,23 @@ def create_episeerr_select_tag():
     """Create a single 'episeerr_select' tag in Sonarr and return its ID."""
     global EPISEERR_SELECT_TAG_ID
 
+    headers = get_sonarr_headers()
+
     if not AUTO_CREATE_TAGS:
         logger.debug(
             "Tag auto-creation disabled, checking for existing episeerr_select tag")
         # Still check if tag exists, just don't create it
-        try:
-            headers = get_sonarr_headers()
-            tags_response = requests.get(
-                f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
+        tags = _get_sonarr_tags(headers)
+        for tag in tags:
+            if tag['label'].lower() == 'episeerr_select':
+                EPISEERR_SELECT_TAG_ID = tag['id']
+                logger.info(
+                    f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
+                return EPISEERR_SELECT_TAG_ID
 
-            if tags_response.ok:
-                for tag in tags_response.json():
-                    if tag['label'].lower() == 'episeerr_select':
-                        EPISEERR_SELECT_TAG_ID = tag['id']
-                        logger.info(
-                            f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
-                        return EPISEERR_SELECT_TAG_ID
-
-            logger.warning(
-                "episeerr_select tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
-            return None
-
-        except Exception as e:
-            logger.warning(f"Could not check for existing tags: {str(e)}")
-            return None
+        logger.warning(
+            "episeerr_select tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
+        return None
 
     # Original auto-creation logic (when AUTO_CREATE_TAGS=true)
     if EPISEERR_SELECT_TAG_ID is not None:
@@ -205,23 +224,9 @@ def create_episeerr_select_tag():
         return EPISEERR_SELECT_TAG_ID
 
     try:
-        headers = get_sonarr_headers()
-        logger.debug(
-            f"Making GET request to {SONARR_URL}/api/v3/tag to fetch existing tags")
+        tags = _get_sonarr_tags(headers)
 
-        tags_response = requests.get(
-            f"{SONARR_URL}/api/v3/tag",
-            headers=headers,
-            timeout=10)
-
-        if not tags_response.ok:
-            logger.error(
-                f"Failed to get tags. Status: {
-                    tags_response.status_code}, Response: {
-                    tags_response.text}")
-            return None
-
-        for tag in tags_response.json():
+        for tag in tags:
             if tag['label'].lower() == 'episeerr_select':
                 EPISEERR_SELECT_TAG_ID = tag['id']
                 logger.info(
@@ -237,6 +242,7 @@ def create_episeerr_select_tag():
         )
         if tag_create_response.ok:
             EPISEERR_SELECT_TAG_ID = tag_create_response.json().get('id')
+            _invalidate_tags_cache()  # Invalidate cache after creating new tag
             logger.info(
                 f"Created tag: 'episeerr_select' with ID {EPISEERR_SELECT_TAG_ID}")
             return EPISEERR_SELECT_TAG_ID
@@ -953,6 +959,17 @@ def check_and_cancel_unmonitored_downloads():
         # Track cancelled items
         cancelled_count = 0
 
+        # Fetch all series once and build a lookup cache to avoid N+1 API calls
+        all_series_response = requests.get(
+            f"{SONARR_URL}/api/v3/series", headers=headers)
+        if not all_series_response.ok:
+            logger.error(
+                f"Failed to retrieve all series. Status: {
+                    all_series_response.status_code}")
+            return
+        series_cache = {s['id']: s for s in all_series_response.json()}
+        logger.info(f"Built series cache with {len(series_cache)} series")
+
         for item in queue:
             # Detailed logging for each queue item
             logger.info(
@@ -967,19 +984,13 @@ def check_and_cancel_unmonitored_downloads():
 
             # Check if this is a TV episode
             if item.get('seriesId') and item.get('episodeId'):
-                # Get series details to check for episeerr tags
-                series_response = requests.get(
-                    f"{SONARR_URL}/api/v3/series/{item['seriesId']}",
-                    headers=headers
-                )
+                # Get series details from cache to check for episeerr tags
+                series = series_cache.get(item['seriesId'])
 
-                if not series_response.ok:
+                if not series:
                     logger.error(
-                        f"Failed to get series details for ID {
-                            item['seriesId']}")
+                        f"Series ID {item['seriesId']} not found in cache")
                     continue
-
-                series = series_response.json()
 
                 # Log series tags
                 logger.info(f"Series tags: {series.get('tags', [])}")

@@ -154,6 +154,24 @@ cleanup_logger = setup_cleanup_logging()
 SONARR_URL = os.getenv('SONARR_URL')
 SONARR_API_KEY = os.getenv('SONARR_API_KEY')
 
+# Series cache for performance optimization
+_series_cache = None
+_series_cache_time = 0
+SERIES_CACHE_TTL = 300  # 5 minutes
+
+
+def get_cached_series():
+    """Get all series from Sonarr with caching to reduce API calls."""
+    global _series_cache, _series_cache_time
+    current_time = time.time()
+    if _series_cache is None or (current_time - _series_cache_time) > SERIES_CACHE_TTL:
+        headers = {'X-Api-Key': SONARR_API_KEY}
+        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+        if response.ok:
+            _series_cache = response.json()
+            _series_cache_time = current_time
+    return _series_cache or []
+
 # Load settings from a JSON configuration file
 
 
@@ -1478,10 +1496,10 @@ def run_grace_watched_cleanup():
             'false').lower() == 'true'
         total_deleted = 0
 
-        # Get all series from Sonarr for title lookup
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
-        all_series = response.json() if response.ok else []
+        # Get all series from Sonarr for title lookup (cached)
+        all_series = get_cached_series()
+        # Build lookup dict for O(1) access instead of O(n) linear search
+        series_lookup = {s['id']: s for s in all_series}
 
         current_time = int(time.time())
 
@@ -1503,8 +1521,7 @@ def run_grace_watched_cleanup():
             for series_id_str, series_data in series_dict.items():
                 try:
                     series_id = int(series_id_str)
-                    series_info = next(
-                        (s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
 
                     if not series_info:
                         continue
@@ -1623,10 +1640,10 @@ def run_grace_unwatched_cleanup():
             'false').lower() == 'true'
         total_deleted = 0
 
-        # Get all series from Sonarr for title lookup
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
-        all_series = response.json() if response.ok else []
+        # Get all series from Sonarr for title lookup (cached)
+        all_series = get_cached_series()
+        # Build lookup dict for O(1) access instead of O(n) linear search
+        series_lookup = {s['id']: s for s in all_series}
 
         current_time = int(time.time())
 
@@ -1648,8 +1665,7 @@ def run_grace_unwatched_cleanup():
             for series_id_str, series_data in series_dict.items():
                 try:
                     series_id = int(series_id_str)
-                    series_info = next(
-                        (s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
 
                     if not series_info:
                         continue
@@ -1774,10 +1790,10 @@ def run_dormant_cleanup():
 
         # Get candidates
         candidates = []
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        all_series = requests.get(
-            f"{SONARR_URL}/api/v3/series",
-            headers=headers).json()
+        # Get all series from Sonarr (cached)
+        all_series = get_cached_series()
+        # Build lookup dict for O(1) access instead of O(n) linear search
+        series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
 
         for rule_name, rule in config['rules'].items():
@@ -1792,8 +1808,7 @@ def run_dormant_cleanup():
             for series_id_str in rule.get('series', {}):
                 try:
                     series_id = int(series_id_str)
-                    series_info = next(
-                        (s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
                     if not series_info:
                         continue
 

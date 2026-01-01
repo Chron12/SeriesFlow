@@ -88,6 +88,11 @@ app.logger.addHandler(stream_handler)
 # Configuration management
 config_path = os.path.join(app.root_path, 'config', 'config.json')
 
+# Config caching
+_config_cache = None
+_config_cache_time = 0
+CONFIG_CACHE_TTL = 30  # 30 seconds
+
 
 def get_tmdb_endpoint(endpoint, params=None):
     """Make a request to any TMDB endpoint with the given parameters."""
@@ -401,12 +406,21 @@ cleanup_logger = setup_cleanup_logging()
 
 
 def load_config():
-    """Load configuration with simplified migration."""
+    """Load configuration with simplified migration and caching."""
+    global _config_cache, _config_cache_time
+    current_time = time.time()
+
+    # Return cached config if still valid
+    if _config_cache is not None and (current_time - _config_cache_time) < CONFIG_CACHE_TTL:
+        return _config_cache
+
     try:
         with open(config_path, 'r') as file:
             config = json.load(file)
         if 'rules' not in config:
             config['rules'] = {}
+        _config_cache = config
+        _config_cache_time = current_time
         return config
     except FileNotFoundError:
         default_config = {
@@ -435,11 +449,15 @@ def load_config():
 
 def save_config(config):
     """Save configuration to JSON file."""
+    global _config_cache, _config_cache_time
     try:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, 'w') as file:
             json.dump(config, file, indent=4)
         app.logger.debug("Config saved successfully")
+        # Update cache with saved config
+        _config_cache = config
+        _config_cache_time = time.time()
     except Exception as e:
         app.logger.error(f"Save failed: {str(e)}")
         raise
