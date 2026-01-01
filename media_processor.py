@@ -1619,6 +1619,49 @@ def save_global_settings(settings):
     except Exception as e:
         logger.error(f"Error saving global settings: {str(e)}")
 
+def add_unmanaged_series(series_id, title, unmonitored_episodes=False):
+    """Add a series to the unmanaged list in global_settings.json."""
+    try:
+        settings = load_global_settings()
+        if 'unmanaged_series' not in settings:
+            settings['unmanaged_series'] = {}
+
+        settings['unmanaged_series'][str(series_id)] = {
+            'unmanaged_at': int(time.time()),
+            'title': title,
+            'unmonitored_episodes': unmonitored_episodes
+        }
+        save_global_settings(settings)
+        logger.info(f"Added series {series_id} ({title}) to unmanaged list")
+    except Exception as e:
+        logger.error(f"Error adding series to unmanaged list: {str(e)}")
+
+def remove_unmanaged_series(series_id):
+    """Remove a series from the unmanaged list."""
+    try:
+        settings = load_global_settings()
+        if 'unmanaged_series' in settings:
+            if str(series_id) in settings['unmanaged_series']:
+                del settings['unmanaged_series'][str(series_id)]
+                save_global_settings(settings)
+                logger.info(f"Removed series {series_id} from unmanaged list")
+    except Exception as e:
+        logger.error(f"Error removing series from unmanaged list: {str(e)}")
+
+def get_unmanaged_series():
+    """Get dict of unmanaged series IDs."""
+    try:
+        settings = load_global_settings()
+        return settings.get('unmanaged_series', {})
+    except Exception as e:
+        logger.error(f"Error getting unmanaged series: {str(e)}")
+        return {}
+
+def is_series_unmanaged(series_id):
+    """Check if a series is explicitly unmanaged."""
+    unmanaged = get_unmanaged_series()
+    return str(series_id) in unmanaged
+
 def check_global_storage_gate():
     """Check if global storage gate allows cleanup to proceed."""
     try:

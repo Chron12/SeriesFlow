@@ -777,6 +777,132 @@ def unassign_series():
     save_config(config)
     return redirect(url_for('index', message=f"Unassigned {len(series_ids)} series from all rules"))
 
+@app.route('/api/unmanage-series', methods=['POST'])
+def api_unmanage_series():
+    """
+    Unmanage series - remove from rules and optionally unmonitor in Sonarr.
+
+    Expects JSON body:
+    {
+        "series_ids": ["123", "456"],
+        "unmonitor_episodes": true/false
+    }
+    """
+    try:
+        import media_processor
+
+        data = request.json
+        series_ids = data.get('series_ids', [])
+        unmonitor_episodes = data.get('unmonitor_episodes', False)
+
+        if not series_ids:
+            return jsonify({
+                'success': False,
+                'message': 'No series IDs provided'
+            }), 400
+
+        # Get Sonarr headers for API calls
+        headers = {
+            'X-Api-Key': SONARR_API_KEY,
+            'Content-Type': 'application/json'
+        }
+
+        # Get series titles for logging/storage
+        all_series = get_sonarr_series()
+        series_map = {str(s['id']): s['title'] for s in all_series}
+
+        # Remove from all rules
+        config = load_config()
+        for rule_name, details in config['rules'].items():
+            series_dict = details.get('series', {})
+            for series_id in series_ids:
+                if series_id in series_dict:
+                    del series_dict[series_id]
+        save_config(config)
+
+        # Process each series
+        unmonitored_count = 0
+        for series_id in series_ids:
+            title = series_map.get(series_id, f"Unknown ({series_id})")
+
+            # Optionally unmonitor all episodes
+            if unmonitor_episodes:
+                success = episeerr_utils.unmonitor_series(int(series_id), headers)
+                if success:
+                    unmonitored_count += 1
+
+            # Add to unmanaged list
+            media_processor.add_unmanaged_series(
+                series_id,
+                title,
+                unmonitor_episodes
+            )
+
+        message = f"Unmanaged {len(series_ids)} series"
+        if unmonitor_episodes:
+            message += f" and unmonitored episodes for {unmonitored_count}"
+
+        app.logger.info(message)
+
+        return jsonify({
+            'success': True,
+            'message': message,
+            'unmanaged_count': len(series_ids),
+            'unmonitored_count': unmonitored_count if unmonitor_episodes else 0
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error unmanaging series: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/remanage-series', methods=['POST'])
+def api_remanage_series():
+    """
+    Re-manage a previously unmanaged series.
+    Removes from unmanaged list and optionally assigns to a rule.
+
+    Expects JSON body:
+    {
+        "series_id": "123",
+        "rule_name": "one_at_a_time" (optional)
+    }
+    """
+    try:
+        import media_processor
+
+        data = request.json
+        series_id = data.get('series_id')
+        rule_name = data.get('rule_name')
+
+        if not series_id:
+            return jsonify({
+                'success': False,
+                'message': 'No series ID provided'
+            }), 400
+
+        # Remove from unmanaged list
+        media_processor.remove_unmanaged_series(series_id)
+
+        # Optionally assign to rule
+        if rule_name:
+            config = load_config()
+            if rule_name in config['rules']:
+                if 'series' not in config['rules'][rule_name]:
+                    config['rules'][rule_name]['series'] = {}
+                config['rules'][rule_name]['series'][str(series_id)] = {
+                    'activity_date': None
+                }
+                save_config(config)
+
+        return jsonify({
+            'success': True,
+            'message': f"Series {series_id} is now manageable again"
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error re-managing series: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 # ============================================================================
 # API ROUTES
 # ============================================================================
@@ -915,23 +1041,32 @@ def cleanup():
 def api_series_with_status():
     """Get series with enhanced status information for the sortable table."""
     try:
+        import media_processor
+
         config = load_config()
         all_series = get_sonarr_series()
-        
+
         # Build assignment mapping
         assignments = {}
         for rule_name, details in config['rules'].items():
             series_dict = details.get('series', {})
             for series_id in series_dict.keys():
                 assignments[str(series_id)] = rule_name
-        
+
+        # Get unmanaged series
+        unmanaged_series = media_processor.get_unmanaged_series()
+
         enhanced_series = []
         for series in all_series:
             series_id = str(series['id'])
-            
+
             # Get assigned rule
             assigned_rule = assignments.get(series_id, 'None')
-            
+
+            # Check if explicitly unmanaged
+            is_unmanaged = series_id in unmanaged_series
+            unmanaged_info = unmanaged_series.get(series_id) if is_unmanaged else None
+
             # Determine status from Sonarr data
             status = 'unknown'
             if series.get('ended'):
@@ -940,14 +1075,14 @@ def api_series_with_status():
                 status = 'continuing'
             elif series.get('status') == 'upcoming':
                 status = 'upcoming'
-            
+
             # Get last episode info
             last_episode = None
             if series.get('lastInfoSync'):
                 last_episode = series['lastInfoSync'][:10]  # Extract date part
             elif series.get('previousAiring'):
                 last_episode = series['previousAiring'][:10]
-            
+
             enhanced_series.append({
                 'id': series['id'],
                 'title': series['title'],
@@ -956,9 +1091,11 @@ def api_series_with_status():
                 'year': series.get('year'),
                 'lastEpisode': last_episode,
                 'titleSlug': series.get('titleSlug'),
-                'ended': series.get('ended', False)
+                'ended': series.get('ended', False),
+                'is_unmanaged': is_unmanaged,
+                'unmanaged_info': unmanaged_info
             })
-        
+
         return jsonify({
             'success': True,
             'series': enhanced_series
